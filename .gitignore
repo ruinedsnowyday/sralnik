@@ -1,0 +1,40 @@
+## LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.synctex(busy)
+*.nav
+*.snm
+*.vrb
+
+## macOS
+.DS_Store
+
+## Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+## Python (for upcoming code)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+## Data & checkpoints
+*.ckpt
+*.pt
+*.pth
+data/
+checkpoints/
+runs/
+wandb/

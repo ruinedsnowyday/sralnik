@@ -1,0 +1,164 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+\usepackage{cvpr}
+
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage[pagebackref,breaklinks,colorlinks]{hyperref}
+\usepackage[capitalize]{cleveref}
+
+\begin{document}
+
+\title{Retrieval-Augmented Memory for Long-Horizon Video World Models}
+
+\author{
+Aleksandr Trofimov\\
+MIT\\
+{\tt\small atrof002@mit.edu}
+\and
+Maryna Bohdan\\
+MIT\\
+{\tt\small mbohdan@mit.edu}
+}
+
+\maketitle
+
+\section{Introduction}
+One of the central challenges in robotics is operating under partial
+observability: an agent only sees a small part of the environment at any given
+moment, but still has to act as if it understands the larger scene. Computer
+vision is a key part of solving this problem because visual observations provide
+the evidence from which the agent must infer, update, and remember the structure
+of the surroundings over time. In many settings, especially embodied and
+interactive ones, a system has to reason over time. It must track what has
+already been seen, maintain a coherent representation of the environment, and
+use that representation to predict future observations. This is difficult
+because visual input arrives sequentially, and a useful model therefore needs
+not only perception but also memory.
+
+World models are one framework for addressing this problem. Broadly speaking, a
+world model learns a compact representation of an environment and uses it to
+predict how observations evolve over time. This idea has been influential in
+both vision and reinforcement learning. Previous work such as PlaNet and Dreamer
+showed that latent dynamics models can support prediction and control directly
+from visual observations \cite{hafner2019planet,hafner2020dreamer}. More recent
+methods, including VideoGPT and IRIS, demonstrated that latent-token and
+transformer-based architectures can model visual sequences effectively
+\cite{yan2021videogpt,micheli2023iris}. Together, these results suggest that
+predictive latent modeling is generally a promising direction for embodied
+visual intelligence.
+
+At the same time, long-horizon consistency remains a clear weakness of current
+approaches. A model may generate plausible short-term predictions while still
+failing to preserve a stable representation of a scene over longer trajectories.
+Once earlier observations fall outside the active context window, the model can
+start drifting (object identities may change, spatial layout may become
+inconsistent, and previously seen scenes may be replaced by something merely
+plausible rather than correct). Transformer-based world models have improved
+sequential prediction \cite{chen2022transdreamer}, but finite context still
+limits how well they handle information that becomes relevant again only after a
+long gap. Recent work such as WorldMem argues that explicit memory may be
+necessary for sustaining long-term visual consistency \cite{xiao2025worldmem}.
+
+This issue becomes particularly acute in indoor embodied environments. An agent
+may observe a room, move through other parts of the scene, and later return from
+a different viewpoint. In that case, a robust world model should still preserve
+the identity of the original room: its rough layout, its objects, and their
+arrangement. If the model instead alters furniture or predicts a different but
+still reasonable-looking room, then it is not really modeling a persistent
+environment. This leads to the main question we study in this project: can a
+world model maintain scene consistency over time, even when the agent revisits
+parts of the environment after a long gap?
+
+We study this question using AI2-THOR and ProcTHOR, which provide controllable
+indoor environments, embodied actions, and structured scene metadata
+\cite{kolve2017ai2thor,deitke2022procthor}. These simulators are well suited to
+our setting because they allow us to generate trajectories and to evaluate
+consistency in a controlled way. However, our project is intentionally narrow in
+scope, as we are not trying to train a large general-purpose world model across
+many homes or room categories. Instead, we focus on a small proof-of-concept
+setting, training a compact model centered on just a few rooms, and testing
+whether it can preserve one room across revisit. This makes our project feasible
+while still isolating the memory problem we care about.
+
+To address this problem, we propose a retrieval-augmented latent world model for
+indoor revisit. The model first encodes visual observations into compact latent
+representations. A small transformer-based dynamics model then predicts future
+latent states from recent observations and actions. We augment this baseline
+with an external memory bank that stores selected past latent states together
+with simple metadata such as timestep or camera position. During rollout, the
+model can retrieve relevant earlier states and condition its predictions on them
+in addition to the recent context, and if information about the room has dropped
+out of the local context window, targeted retrieval may recover it more
+effectively than by relying on the sequence model only.
+
+The project’s contribution is an investigation of whether the model can stay
+stable over a long simulation period. First, we estimate long-horizon consistency
+through a revisit, which gives a more direct test of memory than standard
+short-horizon prediction metrics alone. Second, we examine whether a lightweight
+retrieval mechanism can improve consistency in a setting that is realistic under
+course-project compute limits. Third, we evaluate the model using metrics that
+better suit the question at hand, including visual similarity at revisit time,
+object persistence, and coarse agreement with the original room layout.
+
+Because this is an introduction draft, our results are currently prospective
+rather than final. We expect retrieval-based memory to matter most as the
+temporal gap between first observation and revisit increases. For short
+trajectories, recent context may already be sufficient. For longer ones,
+however, earlier room information is more likely to be forgotten, and explicit
+retrieval should help reduce drift and preserve scene identity more reliably.
+
+Overall, this project studies a small but meaningful version of a broader
+computer vision problem: how to maintain a consistent visual model of an
+environment over time. By narrowing the task to one-room revisit, we aim to test
+whether explicit memory improves long-horizon prediction in a controlled
+embodied setting.
+
+\section{AI Use}
+Generative AI tools were not used in the preparation of this paper introduction.
+
+\begin{thebibliography}{99}
+
+\bibitem{chen2022transdreamer}
+Chang Chen, Yi-Fu Wu, Jaesik Yoon, and Sungjin Ahn.
+TransDreamer: Reinforcement Learning with Transformer World Models.
+\textit{arXiv preprint arXiv:2202.09481}, 2022.
+
+\bibitem{deitke2022procthor}
+Matt Deitke, Eli VanderBilt, Alvaro Herrasti, Luca Weihs, Jordi Salvador, Kiana Ehsani, Winson Han, Eric Kolve, Ali Farhadi, Aniruddha Kembhavi, and Roozbeh Mottaghi.
+ProcTHOR: Large-Scale Embodied AI Using Procedural Generation.
+\textit{Advances in Neural Information Processing Systems}, 2022.
+
+\bibitem{hafner2020dreamer}
+Danijar Hafner, Timothy Lillicrap, Jimmy Ba, and Mohammad Norouzi.
+Dream to Control: Learning Behaviors by Latent Imagination.
+In \textit{International Conference on Learning Representations}, 2020.
+
+\bibitem{hafner2019planet}
+Danijar Hafner, Timothy Lillicrap, Ian Fischer, Ruben Villegas, David Ha, Honglak Lee, and James Davidson.
+Learning Latent Dynamics for Planning from Pixels.
+In \textit{Proceedings of the 36th International Conference on Machine Learning}, pages 2555--2565, 2019.
+
+\bibitem{kolve2017ai2thor}
+Eric Kolve, Roozbeh Mottaghi, Winson Han, Eli VanderBilt, Luca Weihs, Alvaro Herrasti, Matt Deitke, Kiana Ehsani, Daniel Gordon, Yuke Zhu, Aniruddha Kembhavi, Abhinav Gupta, and Ali Farhadi.
+AI2-THOR: An Interactive 3D Environment for Visual AI.
+\textit{arXiv preprint arXiv:1712.05474}, 2017.
+
+\bibitem{micheli2023iris}
+Vincent Micheli, Eloi Alonso, and Fran\c{c}ois Fleuret.
+Transformers are Sample-Efficient World Models.
+In \textit{International Conference on Learning Representations}, 2023.
+
+\bibitem{xiao2025worldmem}
+Zeqi Xiao, Yushi Lan, Yifan Zhou, Wenqi Ouyang, Shuai Yang, Yanhong Zeng, and Xingang Pan.
+WORLDMEM: Long-term Consistent World Simulation with Memory.
+\textit{arXiv preprint arXiv:2504.12369}, 2025.
+
+\bibitem{yan2021videogpt}
+Wilson Yan, Yunzhi Zhang, Pieter Abbeel, and Aravind Srinivas.
+VideoGPT: Video Generation using VQ-VAE and Transformers.
+\textit{arXiv preprint arXiv:2104.10157}, 2021.
+
+\end{thebibliography}
+
+\end{document}
