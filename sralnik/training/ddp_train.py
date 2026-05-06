@@ -107,16 +107,33 @@ def run_train(args: Namespace) -> None:
             memory_mode=_parse_memory(args.memory),
             use_latent_diffusion=bool(args.diffusion),
         )
+        # Apply v2/v3 fidelity overrides (opt-in via CLI; default behaviour unchanged).
+        if getattr(args, "lpips", False):
+            cfg.use_lpips = True
+        if getattr(args, "lpips_weight", None) is not None:
+            cfg.lpips_weight = float(args.lpips_weight)
+        if getattr(args, "pixel_shuffle", False):
+            cfg.use_pixel_shuffle = True
+        if getattr(args, "free_bits", None) is not None:
+            cfg.free_bits = float(args.free_bits)
+        if getattr(args, "kl_balance", None) is not None:
+            cfg.kl_balance = float(args.kl_balance)
+        if getattr(args, "sd_vae", False):
+            cfg.use_sd_vae = True
     model = WorldModel(cfg).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     if resume:
         start_step, _ = load_checkpoint(Path(resume), model, opt)
 
     if _is_dist():
+        # find_unused_parameters=True is needed when:
+        #  - diffusion is on (RenderBottleneck.detach in forward)
+        #  - SD-VAE is on (its frozen params, plus the unused self.decoder remain in the module tree)
+        find_unused = bool(getattr(args, "diffusion", False)) or bool(getattr(args, "sd_vae", False))
         model = DDP(
             model,
             device_ids=[device.index] if device.type == "cuda" else None,
-            find_unused_parameters=bool(args.diffusion),
+            find_unused_parameters=find_unused,
         )
 
     ds = EpisodeChunkDataset(

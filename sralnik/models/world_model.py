@@ -10,7 +10,9 @@ from .config import MemoryMode, ModelConfig
 from .decoder import Decoder, RenderBottleneck
 from .encoder import Encoder
 from .latent_diffusion import LatentDiffusion
+from .lpips_loss import LPIPSLoss
 from .memory import MemoryFusion
+from .sd_vae_decoder import SDVAEDecoder
 
 
 def _kl_balanced(
@@ -65,6 +67,27 @@ class WorldModel(nn.Module):
         else:
             self.bottleneck = None
             self.diffusion = None
+
+        # Optional LPIPS perceptual loss. Frozen VGG backbone, no DDP grad.
+        # Tagged as a buffer-style attribute so DDP's find_unused_parameters doesn't
+        # complain (no params marked trainable). The wrapper sets requires_grad=False
+        # on every internal parameter at init.
+        self.lpips: LPIPSLoss | None
+        if getattr(self.cfg, "use_lpips", False):
+            self.lpips = LPIPSLoss(net="vgg")
+        else:
+            self.lpips = None
+
+        # Optional v3: replace from-scratch CNN decoder with frozen SD-VAE decoder.
+        # When this is on, ``self.decoder`` is still constructed (small param count) but
+        # never called in forward; ``self.sd_vae`` produces ``x_hat`` instead. We keep
+        # ``self.decoder`` in the module so checkpoints from non-SD-VAE runs can resume
+        # cleanly if someone toggles the flag during fine-tuning.
+        self.sd_vae: SDVAEDecoder | None
+        if getattr(self.cfg, "use_sd_vae", False):
+            self.sd_vae = SDVAEDecoder(self.cfg)
+        else:
+            self.sd_vae = None
 
         a_dim = 32
         self.act_dim = a_dim
@@ -124,6 +147,14 @@ class WorldModel(nn.Module):
         z_hist: list[torch.Tensor] = []
         rec_frames: list[torch.Tensor] = []
 
+        # v3: when self.sd_vae is on we defer the decode and run it ONCE on the whole
+        # (B*T, ...) batch after the causal loop finishes — saves T sequential VAE
+        # forwards. Per-step h, z snapshots needed for that batched decode are
+        # collected in h_steps / z_steps below.
+        h_steps: list[torch.Tensor] = []
+        z_steps: list[torch.Tensor] = []
+        use_sd_vae = self.sd_vae is not None
+
         for t in range(T):
             prior_raw = self.prior_net(h)
             prior_mu, prior_logstd = torch.chunk(prior_raw, 2, dim=-1)
@@ -160,16 +191,47 @@ class WorldModel(nn.Module):
             )
             kl_steps.append(kl)
 
-            x_hat = self.decoder(h, z)
-            if return_reconstructions:
-                rec_frames.append(x_hat)
-            rec = F.l1_loss(x_hat, obs[:, t], reduction="none").mean(dim=(1, 2, 3))
-            rec_steps.append(rec * w_phase[:, t])
+            if use_sd_vae:
+                # Defer decode + rec computation until after the loop (batched).
+                h_steps.append(h)
+                z_steps.append(z)
+            else:
+                # Original per-step CNN decode path. Unchanged behaviour for M0–M3.
+                x_hat = self.decoder(h, z)
+                if return_reconstructions:
+                    rec_frames.append(x_hat)
+                rec_l1 = F.l1_loss(x_hat, obs[:, t], reduction="none").mean(dim=(1, 2, 3))
+                if self.lpips is not None:
+                    lp = self.lpips(x_hat, obs[:, t])
+                    rec_t = rec_l1 + self.cfg.lpips_weight * lp
+                else:
+                    rec_t = rec_l1
+                rec_steps.append(rec_t * w_phase[:, t])
 
             if self.diffusion is not None:
                 l0 = self.bottleneck(h, z).detach()
                 ld = self.diffusion.training_loss(l0, h, z)
                 diff_steps.append(ld.expand(B))
+
+        # v3: batched SD-VAE decode + rec losses.
+        if use_sd_vae:
+            H = torch.stack(h_steps, dim=1)                      # (B, T, dh)
+            Z = torch.stack(z_steps, dim=1)                      # (B, T, dz)
+            H_flat = H.reshape(B * T, H.shape[-1])
+            Z_flat = Z.reshape(B * T, Z.shape[-1])
+            x_hat_flat = self.sd_vae(H_flat, Z_flat)             # (B*T, 3, 256, 256)
+            x_hat_BT = x_hat_flat.view(B, T, 3, x_hat_flat.shape[-2], x_hat_flat.shape[-1])
+            for t in range(T):
+                x_hat_t = x_hat_BT[:, t]
+                if return_reconstructions:
+                    rec_frames.append(x_hat_t)
+                rec_l1 = F.l1_loss(x_hat_t, obs[:, t], reduction="none").mean(dim=(1, 2, 3))
+                if self.lpips is not None:
+                    lp = self.lpips(x_hat_t, obs[:, t])
+                    rec_t = rec_l1 + self.cfg.lpips_weight * lp
+                else:
+                    rec_t = rec_l1
+                rec_steps.append(rec_t * w_phase[:, t])
 
         out = {
             "loss_kl": torch.stack(kl_steps, dim=1).mean(),

@@ -50,6 +50,19 @@ class ModelConfig:
     diffusion_time_mlp_mult: int = 2  # hidden = dim * mult (was 4 in heavy variant)
     diffusion_loss_weight: float = 0.06  # λ on ε-loss; lower when step budget is small
 
+    # --- v2 fidelity knobs (opt-in, default off so they don't perturb M0–M3 ablation) ---
+    # LPIPS perceptual reconstruction loss; complements L1, punishes blur.
+    use_lpips: bool = False
+    lpips_weight: float = 0.5  # λ on lpips term; loss_rec_total = L1 + λ * LPIPS
+    # Decoder upsampling: PixelShuffle (sub-pixel conv) avoids ConvTranspose checkerboard.
+    use_pixel_shuffle: bool = False
+    # --- v3 architecture: use Stable Diffusion VAE decoder instead of from-scratch CNN ---
+    # When True, render via frozen pretrained SD-VAE (~30M decoder params, ~160MB ckpt).
+    # The world model predicts a 4×32×32 SD-VAE latent; the VAE decodes to 256×256 RGB
+    # with billions-of-natural-image priors. Replaces (does not stack with) the CNN Decoder.
+    use_sd_vae: bool = False
+    sd_vae_model_id: str = "stabilityai/sd-vae-ft-mse"
+
     def to_checkpoint_dict(self) -> dict:
         return {
             "image_size": self.image_size,
@@ -71,6 +84,11 @@ class ModelConfig:
             "diffusion_time_dim": self.diffusion_time_dim,
             "diffusion_time_mlp_mult": self.diffusion_time_mlp_mult,
             "diffusion_loss_weight": self.diffusion_loss_weight,
+            "use_lpips": self.use_lpips,
+            "lpips_weight": self.lpips_weight,
+            "use_pixel_shuffle": self.use_pixel_shuffle,
+            "use_sd_vae": self.use_sd_vae,
+            "sd_vae_model_id": self.sd_vae_model_id,
         }
 
     @staticmethod
@@ -78,4 +96,10 @@ class ModelConfig:
         dd = dict(d)
         dd["memory_mode"] = MemoryMode(dd["memory_mode"])
         dd["enc_channels"] = tuple(dd["enc_channels"])
+        # Backward compat: old checkpoints lack the v2/v3 flags. Default to off.
+        dd.setdefault("use_lpips", False)
+        dd.setdefault("lpips_weight", 0.5)
+        dd.setdefault("use_pixel_shuffle", False)
+        dd.setdefault("use_sd_vae", False)
+        dd.setdefault("sd_vae_model_id", "stabilityai/sd-vae-ft-mse")
         return ModelConfig(**dd)

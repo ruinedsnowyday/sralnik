@@ -7,7 +7,14 @@ import torch.nn as nn
 
 
 class Decoder(nn.Module):
-    """Upsample from concatenated (h, z) to RGB."""
+    """Upsample from concatenated (h, z) to RGB.
+
+    Two upsampling backbones:
+      * Default: ConvTranspose2d 2x per stage (matches M0-M3 ablation).
+      * ``cfg.use_pixel_shuffle=True``: Conv(c→4c) + PixelShuffle(2). Sub-pixel
+        convolution avoids ConvTranspose's checkerboard artefacts and tends to
+        produce visibly cleaner edges at the same parameter count.
+    """
 
     def __init__(self, cfg, *, spatial_hw: tuple[int, int]):
         super().__init__()
@@ -22,11 +29,19 @@ class Decoder(nn.Module):
         blocks: list[nn.Module] = []
         cur = h
         while cur < out:
-            blocks += [
-                nn.ConvTranspose2d(c, c, 4, stride=2, padding=1),
-                nn.GroupNorm(min(32, c), c),
-                nn.SiLU(),
-            ]
+            if getattr(cfg, "use_pixel_shuffle", False):
+                blocks += [
+                    nn.Conv2d(c, c * 4, 3, padding=1),
+                    nn.PixelShuffle(2),
+                    nn.GroupNorm(min(32, c), c),
+                    nn.SiLU(),
+                ]
+            else:
+                blocks += [
+                    nn.ConvTranspose2d(c, c, 4, stride=2, padding=1),
+                    nn.GroupNorm(min(32, c), c),
+                    nn.SiLU(),
+                ]
             cur *= 2
         self.deconv = nn.Sequential(*blocks)
         self.to_rgb = nn.Conv2d(c, 3, 3, padding=1)

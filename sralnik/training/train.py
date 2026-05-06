@@ -156,6 +156,43 @@ def main(argv: list[str] | None = None) -> int:
     p_tr.add_argument("--ckpt-dir", type=Path, default=Path("checkpoints"))
     p_tr.add_argument("--ckpt-every", type=int, default=500)
     p_tr.add_argument("--resume", type=Path, default=None)
+    # v2 fidelity knobs — all opt-in, leave unset to reproduce M0-M3 ablation behaviour.
+    p_tr.add_argument(
+        "--lpips",
+        action="store_true",
+        help="Add LPIPS perceptual loss to L1 reconstruction. ~30%% slower per step.",
+    )
+    p_tr.add_argument(
+        "--lpips-weight",
+        type=float,
+        default=0.5,
+        help="Weight on LPIPS term: loss_rec = L1 + lpips_weight * LPIPS.",
+    )
+    p_tr.add_argument(
+        "--pixel-shuffle",
+        action="store_true",
+        help="Decoder upsampling via PixelShuffle (sub-pixel conv) instead of ConvTranspose.",
+    )
+    p_tr.add_argument(
+        "--free-bits",
+        type=float,
+        default=None,
+        help="Override ModelConfig.free_bits. Set to 0.0 to let KL escape the floor.",
+    )
+    p_tr.add_argument(
+        "--kl-balance",
+        type=float,
+        default=None,
+        help="Override ModelConfig.kl_balance. Code's formula: balance*KL_with_post_grad + "
+             "(1-balance)*KL_with_prior_grad. Dreamer-V2 'α=0.8 favoring prior' = 0.2 here.",
+    )
+    p_tr.add_argument(
+        "--sd-vae",
+        action="store_true",
+        help="v3: replace the from-scratch CNN decoder with the frozen pretrained "
+             "stabilityai/sd-vae-ft-mse decoder. Pretrained natural-image prior; "
+             "~25%% slower per step. Requires diffusers >=0.27 in the env.",
+    )
 
     p_ev = sub.add_parser("eval", help="Phase-C L1/MSE tables from a checkpoint (see docs/ARCHITECTURE.md §7).")
     p_ev.add_argument("--checkpoint", type=Path, required=True)
