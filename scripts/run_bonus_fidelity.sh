@@ -47,6 +47,19 @@ if [[ "$NO_LPIPS" == "1" ]]; then
     echo "==> LPIPS disabled (NO_LPIPS=1)"
 fi
 
+# Resume from a prior checkpoint to extend a run that hit --max-steps.
+#   RESUME=runs/m_gated_v2_20260506T230000/last.pt bash scripts/run_bonus_fidelity.sh gated 60000
+# When set, loads model + optimizer state and continues from the saved step.
+# A new run dir is still created (separate metrics.jsonl etc.); concatenate
+# old+new metrics manually if you want one continuous loss curve.
+RESUME="${RESUME:-}"
+RESUME_FLAG=""
+if [[ -n "$RESUME" ]]; then
+    [[ -f "$RESUME" ]] || { echo "error: RESUME=$RESUME does not exist" >&2; exit 2; }
+    RESUME_FLAG="--resume $RESUME"
+    echo "==> resuming from $RESUME"
+fi
+
 REPO_DIR="${REPO_DIR:-/mnt/data/sralnik/repo}"
 DATA_DIR="${DATA_DIR:-/mnt/data/sralnik/data/ithor_v2}"
 S3_RUNS="${S3_RUNS:-s3://sralnik-runs-213128717646/runs}"
@@ -108,6 +121,7 @@ uv run torchrun --redirects 1 --tee 1 --standalone --nproc_per_node=8 \
     $LPIPS_FLAGS \
     --pixel-shuffle \
     --free-bits "$FREE_BITS" --kl-balance "$KL_BALANCE" \
+    $RESUME_FLAG \
     2>&1 | tee "$RUN/stdout.log"
 
 echo
