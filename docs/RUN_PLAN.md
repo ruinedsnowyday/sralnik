@@ -121,9 +121,13 @@ See §"Observability" below. Default recommendation: **JSONL + S3** (zero-touch)
 The capacity is now live. Launch the instance into it.
 
 ```bash
+# Capacity Blocks REQUIRE both --instance-market-options MarketType=capacity-block
+# AND --capacity-reservation-specification. Missing the market option yields:
+#   "The market type (purchasing) option is not valid."
 aws ec2 run-instances \
     --instance-type p5.48xlarge \
     --image-id <DLAMI_ID> \
+    --instance-market-options 'MarketType=capacity-block' \
     --capacity-reservation-specification \
         'CapacityReservationTarget={CapacityReservationId=cr-XXXXXXXX}' \
     --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=500,VolumeType=gp3,Iops=10000,Throughput=500}' \
