@@ -25,3 +25,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sralnik"]
+
+# Pin torch to the cu128 wheel index so it works on DLAMI driver 570 (CUDA 12.8 max).
+# The default PyPI torch wheel is built for cu13 which needs NVIDIA driver 580+.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
