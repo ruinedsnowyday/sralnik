@@ -1,0 +1,207 @@
+"""Minimal training loop and CPU smoke tests."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import torch
+from torch.utils.data import DataLoader
+
+from sralnik.models import MemoryMode, ModelConfig, WorldModel
+
+from .dataset import EpisodeChunkDataset, collate_fn
+from .ddp_train import run_train
+from .eval_run import run_eval
+
+
+def smoke_synthetic(
+    *,
+    batch: int = 2,
+    seq: int = 12,
+    image_size: int = 256,
+    device: str = "cpu",
+    memory: MemoryMode = MemoryMode.NONE,
+    diffusion: bool = False,
+) -> None:
+    cfg = ModelConfig(
+        image_size=image_size,
+        memory_mode=memory,
+        use_latent_diffusion=diffusion,
+    )
+    model = WorldModel(cfg).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-6)
+    model.train()
+    obs = torch.rand(batch, seq, 3, image_size, image_size, device=device)
+    actions = torch.zeros(batch, seq, dtype=torch.long, device=device)
+    succ = torch.ones(batch, seq, dtype=torch.bool, device=device)
+    phase = torch.zeros(batch, seq, dtype=torch.long, device=device)
+    phase[:, seq // 2 :] = 1
+    phase[:, -2:] = 2
+    losses = model(obs, actions, succ, phase=phase)
+    losses["loss_total"].backward()
+    opt.step()
+    print(
+        "smoke_synthetic OK",
+        {k: float(v.detach().cpu()) for k, v in losses.items()},
+    )
+
+
+def smoke_fit(
+    data_root: Path | str,
+    *,
+    batch: int = 2,
+    seq: int = 12,
+    steps: int = 2,
+    device: str = "cpu",
+    memory: MemoryMode = MemoryMode.NONE,
+    diffusion: bool = False,
+    max_rows: int | None = 8,
+) -> None:
+    root = Path(data_root)
+    ds = EpisodeChunkDataset(
+        root,
+        seq_len=seq,
+        split="train",
+        exclude_manual=True,
+        max_rows=max_rows,
+    )
+    loader = DataLoader(
+        ds,
+        batch_size=batch,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=0,
+    )
+    batch0 = next(iter(loader))
+    H, W = batch0["obs"].shape[-2], batch0["obs"].shape[-1]
+    cfg = ModelConfig(
+        image_size=H,
+        memory_mode=memory,
+        use_latent_diffusion=diffusion,
+    )
+    model = WorldModel(cfg).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-6)
+    model.train()
+    it = iter(loader)
+    for s in range(steps):
+        try:
+            batch = next(it)
+        except StopIteration:
+            it = iter(loader)
+            batch = next(it)
+        obs = batch["obs"].to(device)
+        actions = batch["actions"].to(device)
+        succ = batch["action_success"].to(device)
+        phase = batch["phase"].to(device)
+        opt.zero_grad(set_to_none=True)
+        losses = model(obs, actions, succ, phase=phase)
+        losses["loss_total"].backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 100.0)
+        opt.step()
+        print(f"step {s}", {k: float(v.detach().cpu()) for k, v in losses.items()})
+
+
+def _parse_memory(s: str) -> MemoryMode:
+    return MemoryMode(s.lower())
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="python -m sralnik.training")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    p_syn = sub.add_parser("smoke-synthetic", help="Rand data + one optim step (no HDF5).")
+    p_syn.add_argument("--device", default="cpu")
+    p_syn.add_argument("--batch", type=int, default=2)
+    p_syn.add_argument("--seq", type=int, default=12)
+    p_syn.add_argument("--image-size", type=int, default=64)
+    p_syn.add_argument("--memory", type=_parse_memory, default=MemoryMode.NONE)
+    p_syn.add_argument("--diffusion", action="store_true")
+
+    p_fit = sub.add_parser("smoke-fit", help="1–N steps on manifest+HDF5 (tiny subset).")
+    p_fit.add_argument("--data", type=Path, required=True)
+    p_fit.add_argument("--device", default="cpu")
+    p_fit.add_argument("--batch", type=int, default=2)
+    p_fit.add_argument("--seq", type=int, default=12)
+    p_fit.add_argument("--steps", type=int, default=2)
+    p_fit.add_argument("--memory", type=_parse_memory, default=MemoryMode.NONE)
+    p_fit.add_argument("--diffusion", action="store_true")
+    p_fit.add_argument("--max-rows", type=int, default=8)
+
+    p_tr = sub.add_parser(
+        "train",
+        help="Full training (single GPU or torchrun multi-GPU). On 8×H100: torchrun --nproc_per_node=8 ...",
+    )
+    p_tr.add_argument("--data", type=Path, required=True)
+    p_tr.add_argument(
+        "--device",
+        default=None,
+        help="Force device when not using torchrun (e.g. cpu, cuda:0). Ignored under distributed.",
+    )
+    p_tr.add_argument("--split", default="train")
+    p_tr.add_argument("--batch", type=int, default=4)
+    p_tr.add_argument("--seq", type=int, default=16)
+    p_tr.add_argument("--max-steps", type=int, default=1000)
+    p_tr.add_argument("--lr", type=float, default=1e-4)
+    p_tr.add_argument("--weight-decay", type=float, default=1e-6)
+    p_tr.add_argument("--grad-clip", type=float, default=100.0)
+    p_tr.add_argument("--image-size", type=int, default=256)
+    p_tr.add_argument("--memory", type=_parse_memory, default=MemoryMode.NONE)
+    p_tr.add_argument("--diffusion", action="store_true")
+    p_tr.add_argument("--bf16", action="store_true", help="bf16 autocast on CUDA (recommended on H100).")
+    p_tr.add_argument("--num-workers", type=int, default=8)
+    p_tr.add_argument("--seed", type=int, default=0)
+    p_tr.add_argument("--max-rows", type=int, default=None)
+    p_tr.add_argument("--ckpt-dir", type=Path, default=Path("checkpoints"))
+    p_tr.add_argument("--ckpt-every", type=int, default=500)
+    p_tr.add_argument("--resume", type=Path, default=None)
+
+    p_ev = sub.add_parser("eval", help="Phase-C L1/MSE tables from a checkpoint (see docs/ARCHITECTURE.md §7).")
+    p_ev.add_argument("--checkpoint", type=Path, required=True)
+    p_ev.add_argument("--data", type=Path, required=True)
+    p_ev.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    p_ev.add_argument("--split", default="val")
+    p_ev.add_argument("--batch", type=int, default=8)
+    p_ev.add_argument("--seq", type=int, default=16)
+    p_ev.add_argument("--num-workers", type=int, default=4)
+    p_ev.add_argument("--seed", type=int, default=0)
+    p_ev.add_argument("--max-rows", type=int, default=None)
+    p_ev.add_argument("--out-parquet", type=Path, default=None)
+    p_ev.add_argument("--no-progress", action="store_true")
+
+    args = p.parse_args(argv)
+
+    if args.cmd == "smoke-synthetic":
+        smoke_synthetic(
+            batch=args.batch,
+            seq=args.seq,
+            image_size=args.image_size,
+            device=args.device,
+            memory=args.memory,
+            diffusion=args.diffusion,
+        )
+        return 0
+    if args.cmd == "smoke-fit":
+        smoke_fit(
+            args.data,
+            batch=args.batch,
+            seq=args.seq,
+            steps=args.steps,
+            device=args.device,
+            memory=args.memory,
+            diffusion=args.diffusion,
+            max_rows=args.max_rows,
+        )
+        return 0
+    if args.cmd == "train":
+        run_train(args)
+        return 0
+    if args.cmd == "eval":
+        args.progress = not args.no_progress
+        run_eval(args)
+        return 0
+    raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

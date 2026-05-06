@@ -39,3 +39,10 @@ venv/
 checkpoints/
 runs/
 wandb/
+
+## Run-specific secrets / AWS resource IDs (do not commit)
+secrets.local.*
+*.pem
+*.local.md
+*.local.sh
+*.local.env

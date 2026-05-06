@@ -21,8 +21,46 @@ ProcTHOR scenes.
     five memory probes, HDF5 writer, parquet manifest, CLI).
 - `write-up/` — LaTeX source (`main.tex`, `cvpr.sty`) and compiled PDF for the project
   introduction.
+- `docs/ARCHITECTURE.md` — **concrete model spec**: shared encoder + RSSM core,
+  **memory conditions M0–M3** (none / concat / cross-attn / **memory-gated**),
+  **latent diffusion decoder**, losses, probe-aligned eval; CPU smoke vs 8× H100.
+- **`sralnik.models` / `sralnik.training`** — PyTorch **RSSM** (`WorldModel`): encoder,
+  GRU dynamics, **memory modes** ``none|concat|attention|gated``, CNN decoder, optional
+  **latent diffusion** head; HDF5 **chunk dataset** + CPU smoke CLI.
 
 See `write-up/main.pdf` for the current introduction draft.
+
+### World model sanity (CPU)
+
+```bash
+uv sync
+# No dataset: random tensors, one optimizer step
+uv run python -m sralnik.training smoke-synthetic --image-size 64
+# Real HDF5 under manifest.parquet (tiny subset)
+uv run python -m sralnik.training smoke-fit --data data/ithor_v2 --steps 2 --max-rows 8
+```
+
+Use `--memory gated` / `--diffusion` to exercise M3 and the diffusion loss.
+
+**8× H100 (single node):** NCCL + `torchrun` scales batch across GPUs; bf16 autocast and TF32 are enabled in the training entry point.
+
+```bash
+uv run torchrun --standalone --nproc_per_node=8 -m sralnik.training train \
+  --data data/ithor_v2 \
+  --batch 4 --seq 16 --max-steps 50000 \
+  --memory gated --bf16 --num-workers 8 \
+  --ckpt-dir runs/wm_m3 --ckpt-every 1000
+```
+
+**Evaluation** (Phase **C** reconstruction, teacher-forced, posterior mean \(z=\mu\)):
+
+```bash
+uv run python -m sralnik.training eval \
+  --checkpoint runs/wm_m3/last.pt --data data/ithor_v2 --split val \
+  --batch 8 --out-parquet eval/val_phase_c.parquet
+```
+
+Printed tables: overall L1/MSE, then groupby `probe_name`, `gap_bucket` (20/100/300/1000 vs other/na), `scene`, and a probe×gap slice. See `docs/ARCHITECTURE.md` §7 for the full eval plan (LPIPS, object-state checks as optional extensions).
 
 ## Data collection
 
