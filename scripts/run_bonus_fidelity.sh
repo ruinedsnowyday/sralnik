@@ -29,9 +29,23 @@ case "$MODE" in
     *) echo "error: memory_mode must be one of: none concat attention gated (got: $MODE)" >&2; exit 2 ;;
 esac
 
+# LPIPS_WEIGHT: weight on the perceptual term added to L1.
+# FREE_BITS:    keep at 1.0 (M0/M1 default). Setting to 0.0 lets KL collapse
+#               to zero (encoder posterior matches dynamics prior trivially,
+#               z carries zero information — observed during the v3 run).
+#               1.0 floor + corrected balance direction is the right combo.
+# KL_BALANCE:   0.2 in this code's convention = Dreamer-V2 α=0.8 favouring
+#               the prior. Strong gradient on prior so it chases posterior
+#               instead of yanking the encoder toward the prior.
 LPIPS_WEIGHT="${LPIPS_WEIGHT:-0.5}"
-FREE_BITS="${FREE_BITS:-0.0}"
+FREE_BITS="${FREE_BITS:-1.0}"
 KL_BALANCE="${KL_BALANCE:-0.2}"
+NO_LPIPS="${NO_LPIPS:-0}"
+LPIPS_FLAGS="--lpips --lpips-weight $LPIPS_WEIGHT"
+if [[ "$NO_LPIPS" == "1" ]]; then
+    LPIPS_FLAGS=""
+    echo "==> LPIPS disabled (NO_LPIPS=1)"
+fi
 
 REPO_DIR="${REPO_DIR:-/mnt/data/sralnik/repo}"
 DATA_DIR="${DATA_DIR:-/mnt/data/sralnik/data/ithor_v2}"
@@ -60,11 +74,11 @@ max_steps=$MAX_STEPS
 diffusion=off
 resume=fresh
 v2_fidelity=on
-  lpips=on
-  lpips_weight=$LPIPS_WEIGHT
+  lpips=$([[ "$NO_LPIPS" == "1" ]] && echo "off" || echo "on (weight=$LPIPS_WEIGHT)")
   pixel_shuffle=on
   free_bits=$FREE_BITS
   kl_balance=$KL_BALANCE
+  sd_vae=off (CNN renderer)
 batch=4
 seq=16
 ckpt_every=2500
@@ -91,7 +105,7 @@ uv run torchrun --redirects 1 --tee 1 --standalone --nproc_per_node=8 \
     --max-steps "$MAX_STEPS" \
     --memory "$MODE" --bf16 --num-workers 4 \
     --ckpt-dir "$RUN" --ckpt-every 2500 \
-    --lpips --lpips-weight "$LPIPS_WEIGHT" \
+    $LPIPS_FLAGS \
     --pixel-shuffle \
     --free-bits "$FREE_BITS" --kl-balance "$KL_BALANCE" \
     2>&1 | tee "$RUN/stdout.log"
