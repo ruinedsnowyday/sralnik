@@ -36,6 +36,15 @@ KL_BALANCE="${KL_BALANCE:-0.2}"
 BATCH="${BATCH:-4}"             # drop to 2 if VAE+LPIPS still OOMs after grad-checkpointing
 SEQ="${SEQ:-16}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
+# Drop LPIPS to recover ~30% throughput. SD-VAE + KL fixes alone still test the
+# headline v3 hypothesis (pretrained image prior + un-degenerated z); LPIPS was
+# the polish on top. Set NO_LPIPS=1 to disable.
+NO_LPIPS="${NO_LPIPS:-0}"
+LPIPS_FLAGS="--lpips --lpips-weight $LPIPS_WEIGHT"
+if [[ "$NO_LPIPS" == "1" ]]; then
+    LPIPS_FLAGS=""
+    echo "==> LPIPS disabled (NO_LPIPS=1)"
+fi
 
 REPO_DIR="${REPO_DIR:-/mnt/data/sralnik/repo}"
 DATA_DIR="${DATA_DIR:-/mnt/data/sralnik/data/ithor_v2}"
@@ -61,8 +70,7 @@ git_sha=$(git rev-parse HEAD)
 memory=$MODE
 max_steps=$MAX_STEPS
 arch=v3
-  lpips=on
-  lpips_weight=$LPIPS_WEIGHT
+  lpips=$([[ "$NO_LPIPS" == "1" ]] && echo "off" || echo "on (weight=$LPIPS_WEIGHT)")
   free_bits=$FREE_BITS
   kl_balance=$KL_BALANCE
   sd_vae_decoder=on (stabilityai/sd-vae-ft-mse, frozen + grad-checkpointed)
@@ -95,7 +103,7 @@ uv run torchrun --redirects 1 --tee 1 --standalone --nproc_per_node=8 \
     --max-steps "$MAX_STEPS" \
     --memory "$MODE" --bf16 --num-workers "$NUM_WORKERS" \
     --ckpt-dir "$RUN" --ckpt-every 2500 \
-    --lpips --lpips-weight "$LPIPS_WEIGHT" \
+    $LPIPS_FLAGS \
     --free-bits "$FREE_BITS" --kl-balance "$KL_BALANCE" \
     --sd-vae \
     2>&1 | tee "$RUN/stdout.log"
