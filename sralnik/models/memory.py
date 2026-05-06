@@ -74,6 +74,10 @@ class MemoryFusion(nn.Module):
             _, idx = torch.topk(scores, k=k, dim=-1)
             idx_exp = idx.unsqueeze(-1).expand(-1, -1, D)
             top_z = torch.gather(hist_z, 1, idx_exp).reshape(B, -1)
+            # Zero-pad when history shorter than memory_topk so _to_delta sees fixed in_features.
+            pad_to = self.cfg.memory_topk * D
+            if top_z.shape[1] < pad_to:
+                top_z = F.pad(top_z, (0, pad_to - top_z.shape[1]))
             out = h + self._to_delta(torch.cat([h, top_z], dim=-1))
             return torch.where(row_ok.unsqueeze(-1), out, h)
 
