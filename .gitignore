@@ -34,7 +34,8 @@ venv/
 *.ckpt
 *.pt
 *.pth
-data/
+# Only the dataset root at repo top-level (not ``sralnik/data/`` Python package).
+/data/
 checkpoints/
 runs/
 wandb/
