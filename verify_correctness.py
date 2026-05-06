@@ -130,9 +130,11 @@ def main() -> None:
         print("  (skipped — no CUDA device)\n")
 
     print("=== CHECK 6: Eval pipeline runs end-to-end on a fresh ckpt ===")
+    # Must use image_size=256 to match the real HDF5 data; lower sizes would mismatch
+    # the encoder FC (encoder's first Linear dim depends on image_size at init time).
     with tempfile.NamedTemporaryFile(suffix=".pt") as f:
         p = Path(f.name)
-        cfg = ModelConfig(image_size=64, memory_mode=MemoryMode.NONE)
+        cfg = ModelConfig(image_size=256, memory_mode=MemoryMode.NONE)
         m = WorldModel(cfg).to(DEV)
         o = torch.optim.AdamW(m.parameters(), lr=1e-4)
         save_checkpoint(p, m, o, step=0, cfg=cfg)
@@ -143,11 +145,11 @@ def main() -> None:
             data=DATA,
             device=DEV,
             split="val",
-            batch=4,
+            batch=2,
             seq=16,
             num_workers=2,
             seed=0,
-            max_rows=8,
+            max_rows=4,
             out_parquet=None,
             progress=False,
         )
