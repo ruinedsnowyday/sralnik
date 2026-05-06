@@ -61,6 +61,9 @@ class EpisodeChunkDataset(Dataset):
 
         df = pd.read_parquet(self.root / "manifest.parquet")
         df = df[df["split"] == split]
+        # Drop rows for episodes whose collection failed: empty/non-.h5 relative_path
+        # (manifest keeps a placeholder row even when the writer never produced a file).
+        df = df[df["relative_path"].fillna("").str.endswith(".h5")]
         if exclude_manual:
             df = df[df["episode_type"] != "manual"]
         if scenes is not None:
