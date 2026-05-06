@@ -53,12 +53,17 @@ class WorldModel(nn.Module):
         self.encoder = Encoder(self.cfg)
         feat_hw = self.encoder.feat_hw
         self.decoder = Decoder(self.cfg, spatial_hw=feat_hw)
-        self.bottleneck = RenderBottleneck(self.cfg, spatial_hw=feat_hw)
         self.memory = MemoryFusion(self.cfg)
+        # Bottleneck + diffusion only exist when latent diffusion is enabled. Creating them
+        # unconditionally leaves RenderBottleneck params unused in forward, which makes DDP
+        # error out ("Expected to have finished reduction in the prior iteration").
+        self.bottleneck: RenderBottleneck | None
         self.diffusion: LatentDiffusion | None
         if self.cfg.use_latent_diffusion:
+            self.bottleneck = RenderBottleneck(self.cfg, spatial_hw=feat_hw)
             self.diffusion = LatentDiffusion(self.cfg, spatial_hw=feat_hw)
         else:
+            self.bottleneck = None
             self.diffusion = None
 
         a_dim = 32
