@@ -19,7 +19,11 @@ class MemoryFusion(nn.Module):
         dz = cfg.stoch_dim
         dh = cfg.deter_dim
         q_in = dh + dz
-        self._q = nn.Linear(q_in, dz)
+        # _q is the query projection used only when memory is engaged. Building it
+        # for MemoryMode.NONE leaves DDP with 2 unused params (weight + bias) and
+        # crashes with "Expected to have finished reduction in the prior iteration".
+        if self.mode is not MemoryMode.NONE:
+            self._q = nn.Linear(q_in, dz)
 
         if self.mode is MemoryMode.CONCAT:
             in_concat = dh + cfg.memory_topk * dz
