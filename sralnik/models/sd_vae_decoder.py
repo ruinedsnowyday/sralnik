@@ -86,6 +86,10 @@ class SDVAEDecoder(nn.Module):
         self.vae.eval()
         return self
 
+    def _vae_decode(self, latent: torch.Tensor) -> torch.Tensor:
+        """Inner VAE decode wrapped for gradient checkpointing."""
+        return self.vae.decode(latent).sample  # (N, 3, 256, 256) in [-1, 1]
+
     def forward(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """``(h, z) → RGB``.
 
@@ -101,9 +105,18 @@ class SDVAEDecoder(nn.Module):
         latent = flat.view(-1, self._latent_c, self._latent_hw, self._latent_hw)
         latent = latent / self.scale_factor                          # SD-VAE convention
 
-        # Decode through the frozen VAE. The VAE is bf16/fp32 sensitive; we let
-        # autocast handle dtype. .sample on the DecoderOutput pulls the tensor.
-        rgb_signed = self.vae.decode(latent).sample                  # (N, 3, 256, 256) in [-1, 1]
+        # Gradient checkpointing on the VAE decode: re-run forward during backward
+        # instead of storing all intermediate activations. With batched decode at
+        # B*T frames in one shot, the activations would otherwise blow 80 GB H100
+        # VRAM. Checkpointing trades ~30% wall time for ~50% peak memory.
+        # Only checkpoint when training and the input requires grad (else just
+        # call directly — eval, no_grad context, or first-step where latent
+        # might not have requires_grad set).
+        if self.training and torch.is_grad_enabled() and latent.requires_grad:
+            from torch.utils.checkpoint import checkpoint
+            rgb_signed = checkpoint(self._vae_decode, latent, use_reentrant=False)
+        else:
+            rgb_signed = self._vae_decode(latent)
 
         # SD-VAE outputs are signed; shift to [0, 1] to match the rest of the pipeline.
         rgb = rgb_signed.add(1.0).mul(0.5).clamp(0.0, 1.0)
