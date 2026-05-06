@@ -58,6 +58,13 @@ S3_RUNS="${S3_RUNS:-s3://sralnik-runs-213128717646/runs}"
 
 cd "$REPO_DIR"
 
+# Pull any code fixes pushed since the queue started. Idempotent if already up-to-date.
+# Critical for picking up the memory.py SDPA fix before M2/M3 launch.
+echo "==> git pull (ff-only)"
+git fetch --quiet origin main 2>&1 | tail -3 || true
+git pull --ff-only 2>&1 | tail -3 || true
+echo
+
 # Mandatory: aws-ofi-nccl plugin segfaults on this instance (no EFA attached).
 # Disable it; NVLink handles intra-node NCCL traffic for our single-node 8-GPU run.
 export NCCL_NET_PLUGIN=none
@@ -112,8 +119,32 @@ uv run torchrun --redirects 1 --tee 1 --standalone --nproc_per_node=8 \
 
 echo
 echo "================================================================"
-echo "  $MODE finished at $(date -u --iso-8601=seconds)"
+echo "  $MODE training finished at $(date -u --iso-8601=seconds)"
 echo "  see: $RUN/stdout.log, $RUN/metrics.jsonl, $RUN/last.pt"
+echo "================================================================"
+
+# --- open-loop rollout eval on expert_eval split (paper qualitative figure) ---
+# Runs immediately after training so each condition's GIFs land before the next
+# training start. Single-GPU, deterministic z=prior_mu, last K=8 frames imagined.
+if [[ -f "$RUN/last.pt" ]]; then
+    EVAL_OUT="$RUN/rollout_eval"
+    echo
+    echo "==> running eval-rollout for $MODE  (out: $EVAL_OUT)"
+    uv run python -m sralnik.training eval-rollout \
+        --checkpoint "$RUN/last.pt" \
+        --data "$DATA_DIR" \
+        --split expert_eval \
+        --k-imagine "${K_IMAGINE:-8}" \
+        --out-dir "$EVAL_OUT" \
+        2>&1 | tee "$RUN/rollout_eval.log"
+    echo "==> eval-rollout done; gifs in $EVAL_OUT/gifs/"
+else
+    echo "WARN: $RUN/last.pt missing, skipping eval-rollout."
+fi
+
+echo
+echo "================================================================"
+echo "  $MODE complete (train + eval) at $(date -u --iso-8601=seconds)"
 echo "  S3 sync should land within 120s; verify with:"
 echo "    aws s3 ls $S3_RUNS/$(basename $RUN)/"
 echo "================================================================"

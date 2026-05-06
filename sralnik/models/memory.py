@@ -89,7 +89,11 @@ class MemoryFusion(nn.Module):
         k_lin = self._att_in(hist_z)
         v = hist_z
         key_keep = hist_mask
-        ctx, _ = F.scaled_dot_product_attention(
+        # F.scaled_dot_product_attention returns a single Tensor in PyTorch 2.x.
+        # The previous `ctx, _ = ...` destructured along dim 0 (batch), silently
+        # picking only row 0 with B=2 and crashing with B>=3. ATTENTION/GATED
+        # never worked at training-time batch=4 because of this.
+        ctx = F.scaled_dot_product_attention(
             q,
             k_lin,
             v,

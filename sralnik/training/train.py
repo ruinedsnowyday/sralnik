@@ -12,6 +12,7 @@ from sralnik.models import MemoryMode, ModelConfig, WorldModel
 
 from .dataset import EpisodeChunkDataset, collate_fn
 from .ddp_train import run_train
+from .eval_rollout import run_eval_rollout
 from .eval_run import run_eval
 
 
@@ -169,6 +170,38 @@ def main(argv: list[str] | None = None) -> int:
     p_ev.add_argument("--out-parquet", type=Path, default=None)
     p_ev.add_argument("--no-progress", action="store_true")
 
+    p_er = sub.add_parser(
+        "eval-rollout",
+        help="Open-loop Phase-C rollout: imagine the last K frames + write GIFs (paper qualitative figure).",
+    )
+    p_er.add_argument("--checkpoint", type=Path, required=True)
+    p_er.add_argument("--data", type=Path, required=True)
+    p_er.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    p_er.add_argument(
+        "--split",
+        default="expert_eval",
+        help="Manifest split to pull episodes from. Default 'expert_eval' (manually recorded).",
+    )
+    p_er.add_argument(
+        "--k-imagine",
+        type=int,
+        default=8,
+        help="Number of last frames to roll out open-loop. Frames before this are encoder-warmup.",
+    )
+    p_er.add_argument("--max-rows", type=int, default=None)
+    p_er.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="Destination dir; defaults to <checkpoint_parent>/rollout_eval",
+    )
+    p_er.add_argument(
+        "--gif-frame-ms",
+        type=int,
+        default=250,
+        help="Per-frame duration in the output GIF, milliseconds. 250 = 4fps.",
+    )
+
     args = p.parse_args(argv)
 
     if args.cmd == "smoke-synthetic":
@@ -199,6 +232,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "eval":
         args.progress = not args.no_progress
         run_eval(args)
+        return 0
+    if args.cmd == "eval-rollout":
+        if args.out_dir is None:
+            args.out_dir = Path(args.checkpoint).parent / "rollout_eval"
+        run_eval_rollout(args)
         return 0
     raise SystemExit(2)
 
