@@ -31,6 +31,7 @@ if absent).
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import sys
 import time
 from dataclasses import asdict
@@ -136,6 +137,12 @@ def run_recorder(
 ) -> None:
     """Top-level recorder loop. Blocks until the user quits."""
 
+    # SDL reads these at init; set before ``import pygame`` / ``pygame.init``.
+    if sys.platform == "darwin":
+        # Explicit placement avoids off-screen windows on some multi-monitor setups.
+        os.environ.setdefault("SDL_VIDEO_WINDOW_POS", "72,72")
+        os.environ.setdefault("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0")
+
     import pygame  # local import: heavy GUI dep
 
     output_dir = Path(output_dir)
@@ -148,7 +155,6 @@ def run_recorder(
         height=height,
         render_instance_segmentation=True,
     )
-    env = ThorEnv(controller_cfg, scene, scene_cfg.tracked_types)
 
     pygame.init()
     pygame.display.set_caption(f"sralnik recorder — {scene}")
@@ -156,6 +162,30 @@ def run_recorder(
     win = pygame.display.set_mode((display_size + panel_w, display_size))
     font = pygame.font.SysFont("monospace", 14)
     big_font = pygame.font.SysFont("monospace", 18, bold=True)
+
+    win.fill((20, 20, 24))
+    splash_y = 24
+    for line in (
+        "sralnik manual recorder",
+        f"scene: {scene}",
+        "",
+        "Starting AI2-THOR (Unity)…",
+        "First launch can take 1–3 minutes.",
+        "",
+        "This window must stay focused for keyboard controls.",
+        "You will also see a separate small AI2-THOR window.",
+    ):
+        win.blit(font.render(line, True, (200, 200, 200)), (24, splash_y))
+        splash_y += 20
+    pygame.display.flip()
+
+    print(
+        "[recorder] Pygame window should be visible now "
+        f"(title: sralnik recorder — {scene}). Unity is starting next.",
+        flush=True,
+    )
+
+    env = ThorEnv(controller_cfg, scene, scene_cfg.tracked_types)
 
     try:
         _episode_loop(
