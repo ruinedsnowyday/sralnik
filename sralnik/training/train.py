@@ -12,6 +12,12 @@ from sralnik.models import MemoryMode, ModelConfig, WorldModel
 
 from .dataset import EpisodeChunkDataset, collate_fn
 from .ddp_train import run_train
+from .eval_memory import (
+    run_eval_latent_cache,
+    run_eval_latent_probes,
+    run_eval_memory_intervention,
+    run_eval_memory_trace,
+)
 from .eval_rollout import run_eval_rollout
 from .eval_run import run_eval
 
@@ -239,6 +245,43 @@ def main(argv: list[str] | None = None) -> int:
         help="Per-frame duration in the output GIF, milliseconds. 250 = 4fps.",
     )
 
+    p_mt = sub.add_parser("eval-memory-trace", help="One-GPU memory gate/retrieval trace eval.")
+    p_mt.add_argument("--checkpoint", type=Path, required=True)
+    p_mt.add_argument("--data", type=Path, required=True)
+    p_mt.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    p_mt.add_argument("--split", default="val")
+    p_mt.add_argument("--max-rows", type=int, default=None)
+    p_mt.add_argument("--out-dir", type=Path, required=True)
+
+    p_mi = sub.add_parser("eval-memory-intervention", help="One-GPU eval-time memory ablations.")
+    p_mi.add_argument("--checkpoint", type=Path, required=True)
+    p_mi.add_argument("--data", type=Path, required=True)
+    p_mi.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    p_mi.add_argument("--split", default="val")
+    p_mi.add_argument("--max-rows", type=int, default=None)
+    p_mi.add_argument("--k-imagine", type=int, default=8)
+    p_mi.add_argument(
+        "--interventions",
+        default="normal,disabled_all,disabled_phase_c,shuffled_memory,all_history",
+        help="Comma-separated variants: normal,disabled_all,disabled_phase_c,shuffled_memory,all_history.",
+    )
+    p_mi.add_argument("--max-gifs", type=int, default=6)
+    p_mi.add_argument("--out-dir", type=Path, required=True)
+
+    p_lc = sub.add_parser("eval-latent-cache", help="Extract reusable frozen h/z/prior features.")
+    p_lc.add_argument("--checkpoint", type=Path, required=True)
+    p_lc.add_argument("--data", type=Path, required=True)
+    p_lc.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    p_lc.add_argument("--split", default="val")
+    p_lc.add_argument("--max-rows", type=int, default=None)
+    p_lc.add_argument("--out-dir", type=Path, required=True)
+
+    p_lp = sub.add_parser("eval-latent-probes", help="Train simple probes on M0/M3 latent caches.")
+    p_lp.add_argument("--m0-cache", type=Path, required=True)
+    p_lp.add_argument("--m3-cache", type=Path, required=True)
+    p_lp.add_argument("--seed", type=int, default=0)
+    p_lp.add_argument("--out-dir", type=Path, required=True)
+
     args = p.parse_args(argv)
 
     if args.cmd == "smoke-synthetic":
@@ -274,6 +317,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.out_dir is None:
             args.out_dir = Path(args.checkpoint).parent / "rollout_eval"
         run_eval_rollout(args)
+        return 0
+    if args.cmd == "eval-memory-trace":
+        run_eval_memory_trace(args)
+        return 0
+    if args.cmd == "eval-memory-intervention":
+        run_eval_memory_intervention(args)
+        return 0
+    if args.cmd == "eval-latent-cache":
+        run_eval_latent_cache(args)
+        return 0
+    if args.cmd == "eval-latent-probes":
+        run_eval_latent_probes(args)
         return 0
     raise SystemExit(2)
 
