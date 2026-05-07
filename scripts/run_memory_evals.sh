@@ -16,8 +16,17 @@ K_IMAGINE="${K_IMAGINE:-8}"
 MAX_ROWS="${MAX_ROWS:-}"
 M3_RUN="${M3_RUN:?set M3_RUN=runs/<m3_run>}"
 M0_RUN="${M0_RUN:-}"
+PYTHON_BIN="${PYTHON_BIN:-}"
 
 cd "$REPO_DIR"
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  if [[ -x "$REPO_DIR/.venv/bin/python" ]]; then
+    PYTHON_BIN="$REPO_DIR/.venv/bin/python"
+  else
+    PYTHON_BIN="python"
+  fi
+fi
 
 echo "==> git pull (ff-only)"
 git fetch --quiet origin main 2>&1 | tail -3 || true
@@ -43,7 +52,7 @@ run_existing_eval() {
   # The existing teacher-forced eval excludes manual episodes internally, so it
   # is useful for val/test but not for the expert_eval manual split.
   if [[ "$split" != "expert_eval" ]]; then
-    uv run python -m sralnik.training eval \
+    "$PYTHON_BIN" -m sralnik.training eval \
       --checkpoint "$run/last.pt" \
       --data "$DATA_DIR" \
       --device "$DEVICE" \
@@ -55,7 +64,7 @@ run_existing_eval() {
       2>&1 | tee "eval/$name/$split/phase_c.log"
   fi
 
-  uv run python -m sralnik.training eval-rollout \
+  "$PYTHON_BIN" -m sralnik.training eval-rollout \
     --checkpoint "$run/last.pt" \
     --data "$DATA_DIR" \
     --device "$DEVICE" \
@@ -71,7 +80,8 @@ run_latent_cache() {
   local split="$2"
   local name
   name="$(run_name "$run")"
-  uv run python -m sralnik.training eval-latent-cache \
+  mkdir -p "eval/$name/$split"
+  "$PYTHON_BIN" -m sralnik.training eval-latent-cache \
     --checkpoint "$run/last.pt" \
     --data "$DATA_DIR" \
     --device "$DEVICE" \
@@ -90,7 +100,7 @@ for split in $SPLITS; do
   run_existing_eval "$M3_RUN" "$split"
 
   m3_name="$(run_name "$M3_RUN")"
-  uv run python -m sralnik.training eval-memory-trace \
+  "$PYTHON_BIN" -m sralnik.training eval-memory-trace \
     --checkpoint "$M3_RUN/last.pt" \
     --data "$DATA_DIR" \
     --device "$DEVICE" \
@@ -99,7 +109,7 @@ for split in $SPLITS; do
     "${max_rows_args[@]}" \
     2>&1 | tee "eval/$m3_name/$split/memory_trace.log"
 
-  uv run python -m sralnik.training eval-memory-intervention \
+  "$PYTHON_BIN" -m sralnik.training eval-memory-intervention \
     --checkpoint "$M3_RUN/last.pt" \
     --data "$DATA_DIR" \
     --device "$DEVICE" \
@@ -115,7 +125,8 @@ for split in $SPLITS; do
     run_existing_eval "$M0_RUN" "$split"
     run_latent_cache "$M0_RUN" "$split"
     m0_name="$(run_name "$M0_RUN")"
-    uv run python -m sralnik.training eval-latent-probes \
+    mkdir -p "eval/latent_probe_compare"
+    "$PYTHON_BIN" -m sralnik.training eval-latent-probes \
       --m0-cache "eval/$m0_name/$split/latent_cache" \
       --m3-cache "eval/$m3_name/$split/latent_cache" \
       --out-dir "eval/latent_probe_compare/$split" \
