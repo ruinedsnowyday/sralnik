@@ -1,5 +1,26 @@
 # 24h 8×H100 Run: SRALNIK Memory-Augmented World Model
 
+> ⚠ **POSTMORTEM HEADER (read first, written 2026-05-07).** This file is the
+> *planning artifact* written before the 8×H100 capacity block. The plan was
+> partially executed — **M0 and M1 ran to completion; M2 and the matched
+> M3 were skipped**, and a v2 fidelity intervention (LPIPS + KL-balance fix
+> + PixelShuffle on a CNN renderer) was substituted for the matched M3 after
+> M1 ≈ M0 was observed at 75k steps. A v3 SD-VAE attempt was tried and
+> aborted due to a free-bits-induced KL collapse before the v2 settings were
+> nailed down. For the actual run record, see:
+>
+> - **`docs/PAPER_ARCHITECTURE_SUMMARY.md`** — what was trained, exactly.
+> - **`docs/DESIGN_EVOLUTION.md`** — narrative of the divergence between this
+>   plan and the shipped state.
+> - **`docs/V2_FIDELITY.md`** — the substituted intervention's flags + caveats.
+> - **`docs/ARCHITECTURE.md` §13** — implementation deltas vs the design spec.
+>
+> The body below is left intact as the planning record. It accurately
+> describes the AWS launch / NCCL / data-evacuation / observability
+> infrastructure (which all worked); it does **not** accurately describe
+> which conditions were trained. Use it as a runbook for re-running the
+> full ablation, not as a description of the shipped result.
+
 ## Context
 
 **Why this plan exists.** SRALNIK (MIT 6.S058 course project, Bohdan + Trofimov) is a memory-augmented latent world model for AI2-THOR scene reconstruction. The full ablation across memory conditions M0–M3 (none / concat / cross-attn / gated) needs 8×H100 wall-clock, which we have for exactly **24 hours** via an AWS Capacity Block that **starts in 55 minutes** and at whose end the instance is **terminated** (anything not evacuated is gone). The codebase is implemented end-to-end (DDP + bf16 + ckpt/resume + Phase-C eval), but there is **no** wandb, no Docker, no AWS scripts. This plan covers: (1) pre-flight in the next 50 minutes, (2) AWS launch + instance setup, (3) a time-blocked schedule across all four memory conditions plus eval, (4) live observability over SSH, and (5) a three-layer evacuation strategy that survives the hard 24h cutoff. Success = four trained checkpoints + Phase-C eval parquets in S3 + reproducible run metadata, ready to feed paper figures.
