@@ -1,5 +1,15 @@
 # SRALNIK v2/v3 fidelity stack
 
+> **Status (2026-05-07 update):** The v2 stack (LPIPS + free_bits=1.0 +
+> kl_balance=0.2 + PixelShuffle, on the *CNN* renderer — **without** SD-VAE)
+> was used as the headline intervention run for the paper, replacing the
+> originally-planned matched M3 condition. The v3 SD-VAE path is opt-in and
+> remains in the codebase but was *not* used for shipped headline results
+> (a `free_bits=0.0` setting tried during v3 development caused a KL→0
+> collapse that took us a half-cycle to diagnose; we rolled back to
+> `free_bits=1.0` and dropped SD-VAE for the budget). The flag descriptions
+> below are accurate; the recommended values now reflect what shipped.
+
 User-facing documentation for the architectural interventions added on top of
 the matched M0/M1/M2/M3 ablation. Everything here is **opt-in**; without the
 relevant CLI flags, training runs identically to the matched-ablation
@@ -31,7 +41,7 @@ The v2/v3 stack addresses all three with opt-in flags that compose.
 |---|---|---|---|
 | `--lpips` | off | Adds VGG-feature-space perceptual loss to L1. | Punishes blur in feature space; complementary to L1. |
 | `--lpips-weight 0.5` | 0.5 | Weight on the LPIPS term. | `loss_rec = L1 + λ·LPIPS`. |
-| `--free-bits 0.0` | (1.0 in cfg) | Override KL clamp floor. 0.0 lets KL exceed the floor. | KL term gets nonzero gradient; encoder is incentivised to encode information into z. |
+| `--free-bits 1.0` | (1.0 in cfg) | **Keep the floor at 1.0** (do *not* set to 0.0). | Floor of 1.0 nat per latent forces the encoder to encode information; without it the encoder finds the trivial degenerate solution `q=p` and KL collapses to 0. **`free_bits=0.0` was tried during v3 development and observed to cause encoder-collapse — do not use.** |
 | `--kl-balance 0.2` | (0.8 in cfg) | Override KL balance direction. 0.2 in this code's convention = Dreamer α=0.8 favouring the prior. | Prior network receives stronger gradient; encoder is allowed to encode informative latents. |
 | `--pixel-shuffle` | off | Decoder upsampling via PixelShuffle (sub-pixel conv). | Avoids ConvTranspose checkerboard. **Has no effect when `--sd-vae` is on** (SD-VAE replaces the upsampling stack entirely). |
 | `--sd-vae` | off | Replace from-scratch CNN decoder with frozen `stabilityai/sd-vae-ft-mse`. | World model now predicts a `(4, 32, 32)` SD-VAE latent; the VAE's pretrained natural-image decoder produces RGB. |
@@ -95,10 +105,28 @@ KL_BALANCE=0.5   bash scripts/run_v3.sh gated 50000   # neutral balance
 
 ## Caveats
 
-- **v3 runs are NOT directly comparable to matched M0/M1/M2/M3.** The
-  decoder, loss function, and KL configuration all differ. Use them as a
-  separate "architectural recovery" results section in the paper, not as
-  additional points in the matched ablation table.
+- **v2/v3 runs are NOT directly comparable to matched M0/M1.** The loss
+  function and KL configuration differ from the matched conditions; the v3
+  decoder also differs (SD-VAE) when that flag is set. The v2 run with
+  CNN renderer (the configuration shipped for the paper) shares the *decoder*
+  with M0/M1 but differs in loss (LPIPS added), KL configuration
+  (`free_bits=1.0` retained, `kl_balance=0.2` corrected), and upsampling
+  backbone (PixelShuffle). Treat v2/v3 as a separate "architectural recovery"
+  results section, not as additional points in a matched ablation table.
+  In our shipped paper, the comparison frame is **M0** (matched, posterior-
+  collapsed) vs **M1** (matched, posterior-collapsed, memory-mode change
+  doesn't help) vs **M3+v2-fidelity** (intervention; posterior-recovered;
+  scene-conditioning emerges) — three points, three different configurations,
+  used to make a diagnostic-of-failure-modes argument rather than a
+  rigorous ablation.
+
+- **SD-VAE is opt-in and was not used in the shipped headline runs.** The
+  `--sd-vae` flag is wired through the launcher and verify scripts pass on
+  it, but the final paper figure used the CNN renderer (with v2 fidelity
+  flags only). SD-VAE is documented here as a future-work / v2-of-paper
+  intervention. If you re-run with `--sd-vae`, ensure `BATCH=2` (memory),
+  `NO_LPIPS=1` (throughput) and `--free-bits 1.0 --kl-balance 0.2` (do not
+  re-introduce the v3 collapse).
 
 - **SD-VAE has a domain shift.** The VAE was trained on natural photographs;
   AI2-THOR produces Unity-rendered scenes that are photo-realistic-ish but

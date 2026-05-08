@@ -424,3 +424,108 @@ GPU-days**; heavy diffusion can be **~1–5 GPU-days**.
   - `eval` — Phase-C **L1/MSE** tables + optional per-frame **parquet**.
 
 Exact **CLI flags** and a copy-pastable **H100** command line are in **`README.md`**.
+
+---
+
+## 13. Implementation notes (post-deployment)
+
+This document was written as the design spec **before** the 8× H100 run. After
+the run, several specifics drifted between this spec and the shipped code. The
+authoritative end-state is **`docs/PAPER_ARCHITECTURE_SUMMARY.md`**; this section
+lists the deltas you should be aware of when reading §1–§11 above.
+
+### M1 — last-k retrieval, not learned top-k
+
+§0 and §4.1 describe M1 as "top-\(k\) retrieved latents [...] fused by an MLP."
+The original implementation scored history latents via a learned `_q` projection
+and used `torch.topk` to select the k highest-scoring entries. Two issues
+surfaced during the run:
+
+1. `torch.topk` returns non-differentiable indices, so gradient could not flow
+   into the `_q` projection. The "learned retrieval" never actually trained;
+   `_q` stayed at random init, making the scoring effectively random.
+2. The per-batch `_q` parameters being unused triggered DDP's
+   `find_unused_parameters=False` error, blocking M1 launch entirely.
+
+The shipped fix (`memory.py`, commit `276f8d6`) drops the scoring and uses
+**last-k retrieval**: `top_z = hist_z[:, -k:, :]` — the k most recent entries
+in episode order, with `_q` removed for `MemoryMode.CONCAT`. M1 is therefore
+"last-k retrieval + concat + MLP residual" in the final implementation.
+
+### M2 / M3 — single-head SDPA, not multi-head
+
+§4.1 describes M2 as "MHA with query from \((h_{t-1}, z_t)\)." `cfg.memory_heads
+= 4` is validated to divide `stoch_dim` but the code never splits the attention
+into heads. `MemoryFusion` uses **single-head** `F.scaled_dot_product_attention`:
+one query of shape `(B, 1, d_z)`, keys/values from `_att_in(hist_z)` and
+`hist_z`. The `_nhead` attribute exists but is dead code. M2 in the shipped
+code is single-head cross-attention; M3 is the same plus a sigmoid scalar gate.
+
+### Memory keys are projected at read time, not write time
+
+§3.1 describes the memory tuple as `Value v ∈ ℝ^d_z`, `Key k = W_k z_t + b`,
+implying a learned write-time key projection. The shipped code does not
+construct keys at write time: `z_hist.append(z.detach())` stores raw z's. The
+learned key projection is `_att_in`, applied at **read** time inside the SDPA
+call — not the same mechanism as the write-time projection in §3.1. There is
+no per-entry stored key; keys are recomputed from values at retrieval.
+
+### KL balancing — code's `kl_balance` is the inverse of Dreamer-V2's α
+
+§2.2 / §4.2 calls the KL term "Dreamer-style balancing." The shipped
+`_kl_balanced` is:
+
+```
+kl = balance · KL(post,           sg(prior))   # gradient flows on encoder
+   + (1-balance) · KL(sg(post),   prior)        # gradient flows on prior
+```
+
+With the *shipped* default `kl_balance = 0.8`, this puts 80% of the gradient
+weight on the encoder being pulled toward the prior — the **opposite** of
+Dreamer-V2's α=0.8 convention (which puts 80% on the prior chasing the
+posterior). The empirical consequence on M0/M1: KL pinned at the free-bits
+floor of 1.0 for all 75k steps, encoder posterior matches prior to floor
+precision, z is degenerate. This was identified as a code-side bug post-hoc.
+
+The v2 fidelity intervention (`docs/V2_FIDELITY.md`) corrects this with
+`--kl-balance 0.2`, which under the shipped formula puts 80% of gradient on
+the prior — Dreamer-V2's intended α=0.8 behaviour. Combined with `--free-bits
+1.0` retained, this is the configuration where KL escapes the floor for the
+first time across all conditions.
+
+### v2 fidelity stack (LPIPS / kl-balance fix / PixelShuffle / SD-VAE)
+
+The v2 stack is **opt-in** and was introduced after this design spec was
+finalised. Documented in **`docs/V2_FIDELITY.md`**. Briefly:
+
+- `--lpips`: VGG-feature perceptual loss added to L1.
+- `--free-bits 1.0` + `--kl-balance 0.2`: re-impose information floor with
+  Dreamer-correct gradient direction (un-degenerates z).
+- `--pixel-shuffle`: sub-pixel conv decoder upsample (no-op when `--sd-vae` on).
+- `--sd-vae`: replace from-scratch CNN decoder with frozen `stabilityai/
+  sd-vae-ft-mse` (~30M decoder params, pretrained on natural images). Uses
+  gradient checkpointing on the VAE forward to fit 8×H100 80GB at B*T=64.
+
+None of these flags are set by default. Without them, training reproduces the
+matched M0/M1/M2/M3 ablation exactly as described in §0–§11.
+
+### What was actually run vs. what §8 ("Training stages") plans
+
+§8 plans Stage 0 sanity → Stage 1 core (M0, M2, M3 matched) → Stage 2 latent
+diffusion. Reality (per `docs/DESIGN_EVOLUTION.md` and the run logs):
+
+- Stage 0: ran (`smoke-synthetic`, `smoke-fit`, then `verify_correctness.py`).
+- Stage 1: M0 and M1 ran to 75k steps each. **M2 and the matched M3 were not
+  executed** — buffer was redirected to the v2 fidelity intervention after
+  M1 ≈ M0 was observed.
+- Stage 2: latent diffusion never enabled in any shipped run. Bottleneck +
+  TinyLatentUNet exist in code but aren't on the rendering path.
+
+Cross-references for the actual end-state:
+- **`docs/PAPER_ARCHITECTURE_SUMMARY.md`** — paper-grade spec of M0 and
+  M3+v2-fidelity exactly as trained.
+- **`docs/V2_FIDELITY.md`** — flag-by-flag explanation of the v2 stack.
+- **`docs/DESIGN_EVOLUTION.md`** — narrative of how the implementation
+  diverged from this spec during the 8×H100 run.
+- **`docs/RUN_PLAN.md`** — the original 24h runbook (planning artifact;
+  see its postmortem header for what actually ran).
